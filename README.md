@@ -4,7 +4,7 @@
 
 支持 **roothide（Dopamine RootHide 等隐根，默认）**、rootless（Dopamine / palera1n）与 rootful 三种越狱环境，目标 iOS 15 及以上。
 
-> GitHub 仓库：<https://github.com/evandersun/ScreenTimeSpoofer>　|　**越狱源：`https://evandersun.github.io/`**（Sileo / Zebra / Cydia 添加后直接搜索安装，自动匹配 roothide / rootless）　|　预编译包下载：<https://github.com/evandersun/ScreenTimeSpoofer/releases/tag/v0.6.3>
+> GitHub 仓库：<https://github.com/evandersun/ScreenTimeSpoofer>　|　**越狱源：`https://evandersun.github.io/`**（Sileo / Zebra / Cydia 添加后直接搜索安装，自动匹配 roothide / rootless）　|　预编译包下载：<https://github.com/evandersun/ScreenTimeSpoofer/releases/tag/v0.6.4>
 
 ---
 
@@ -165,6 +165,16 @@ cat /var/mobile/Library/Logs/ScreenTimeSpoofer-boot.log
 ```
 
 把内容发我即可定位。
+
+### v0.6.4：设置页新增「QQ群：1135135953」入口
+
+设置页 footer 加了**第三个按钮**（橙色），标题就叫 `QQ群：1135135953`，点一下**纯异步**打开 QQ 群 universal-share 链接，交给系统用 QQ / Safari 打开加群页。
+
+- 链接原样保留 `authKey` / `busi_data` / `data` / `svctype` / `tempid` 全部参数，不做二次编码（`NSURL` 把 query 原样交给系统）。
+- 沿用 v0.6.3 的教训：**只用 `openURL:options:completionHandler:` 异步版**，绝不调同步 `[app openURL:]`。同步版会阻塞主线程等待系统判定，正是之前「按了没反应 / 卡 20 秒」的根因。https 链接不进跳转协调器，也不 pop 当前页。
+- footer 高度 `178 → 236`，状态标签下移；`viewDidLayoutSubviews` 同步对齐第三个按钮。点击会写进同一份 boot 日志（`[BUTTON]` / `[QQ]`），抓日志即可确认按钮是否被点到、链接是否发出。
+- 桩头 `UIColor` 补 `systemOrangeColor` 声明（仅为编译，运行时是标准 iOS 15 API）。
+- 版本 `0.6.4`；roothide（`iphoneos-arm64e`）与 rootless（`iphoneos-arm64`）两个包同步发布。
 
 ### v0.6.3：把「一键跳转」从 20 多秒压到 1 秒内
 
@@ -719,7 +729,7 @@ make clean && make package      # Makefile 已默认 roothide + ARCHS="arm64 arm
 | `THEOS_PACKAGE_SCHEME` | `roothide` | 默认隐根包（rootful 式绝对路径 + `iphoneos-arm64e` + .jbroot 链接）；rootless 用 `make THEOS_PACKAGE_SCHEME=rootless`，rootful 用 `make THEOS_PACKAGE_SCHEME=rootful` |
 | `SUBPROJECTS` | `prefs` | 一并编译设置页 bundle（见 `prefs/Makefile`） |
 
-产物在 `packages/com.evander.screentimespoofer_0.6.3_iphoneos-arm64e.deb`。
+产物在 `packages/com.evander.screentimespoofer_0.6.4_iphoneos-arm64e.deb`。
 
 > `control` 里的 `Package` / `Maintainer` / `Author` 已设为 `com.evander.screentimespoofer` / `evander`；如果要发布自己的分支，记得先换掉，否则会和已有包冲突。
 

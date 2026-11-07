@@ -18,6 +18,8 @@
 //     v0.6.2 定位到「首页不 active 时 didSelect 被忽略」，改为多阶段协调器，
 //     跳转终于成功。v0.6.3 解决跳转要 20 多秒：删掉阻塞主线程的同步
 //     openURL:/AppDelegate 直投、URL 精简为 2 个纯异步、立即 pop + 缩短延迟。
+//   · v0.6.4 footer 加第三个按钮「QQ群：1135135953」，纯异步 openURL 打开
+//     QQ 群 universal-share 链接（https 交给系统，不进跳转协调器）。
 //
 
 #import <Foundation/Foundation.h>
@@ -163,7 +165,7 @@ static NSArray *STSManualSpecifiers(id target) {
     @try {
         PSSpecifier *group = [PSSpecifier groupSpecifierWithName:@"屏幕使用时间"];
         if (group) {
-            [group setProperty:@"填入分钟数后点「应用」；点「打开屏幕使用时间」进入该页面查看（若系统不允许自动跳转，会给出返回设置首页的按钮）"
+            [group setProperty:@"填入分钟数后点「应用」；点「打开屏幕使用时间」进入该页面查看；点「QQ群：1135135953」加入交流群"
                         forKey:@"footerText"];
             [arr addObject:group];
         }
@@ -484,12 +486,22 @@ static STSJumpCoordinator *gSTSJumpCoordinator = nil;
 
 @end
 
+#pragma mark - QQ 群入口（v0.6.4）
+
+/// QQ 群「1135135953」的 universal-share 链接。原样保留用户给出的全部参数
+/// （authKey / busi_data / data / svctype / tempid），不做二次编码：NSURL 把
+/// query 原样交给系统，SpringBoard 再用 Safari / QQ 打开它。
+static NSString *STSQQGroupURLString(void) {
+    return @"https://qun.qq.com/universal-share/share?ac=1&authKey=6JLxrWHLHaDCYS93fePT0qoFaPsl9h3DYOXqEWbvW0eeqN0t4UiH%2Fj7UNgmbGCO2&busi_data=eyJncm91cENvZGUiOiIxMTM1MTM1OTUzIiwidG9rZW4iOiJwdGxuRjNiUnZsWGdrVlNrYTB6RGgva3RZRHUrZUVBVHB1QjdzNTZUTElBVXVYNkJLZ2IzV1BKSjQxVzdYUWRCIiwidWluIjoiMjE5NzgyMjQzNyJ9&data=DPx-nZpHpXqtm9-ZXBmI0VFeTa5MhmbveENjh5pLUtgvwJoPpvzhMR3PHgo8vsWk1YnnIMz0crdua5r-XGDNmg&svctype=4&tempid=h5_group_info";
+}
+
 #pragma mark - 设置页
 
 @interface STSRootListController : PSListController {
     BOOL _stsLoaded;        // 装载尝试过就不再重复
     UIButton *_stsApply;    // footer 里的「应用」按钮
     UIButton *_stsOpen;     // footer 里的「打开屏幕使用时间」按钮
+    UIButton *_stsQQ;       // footer 里的「QQ群：1135135953」按钮（v0.6.4）
     UILabel  *_stsStatus;   // footer 里的状态标签：保证每次点击都有可见反应
 }
 @end
@@ -540,9 +552,9 @@ static STSJumpCoordinator *gSTSJumpCoordinator = nil;
     }
 }
 
-#pragma mark - footer：两个按钮 + 状态标签（tableFooterView，不依赖 PSButtonCell）
+#pragma mark - footer：三个按钮 + 状态标签（tableFooterView，不依赖 PSButtonCell）
 
-#define STS_FOOTER_H  178.0
+#define STS_FOOTER_H  236.0
 
 - (void)sts_installFooterButtons {
     @try {
@@ -583,8 +595,21 @@ static STSJumpCoordinator *gSTSJumpCoordinator = nil;
         [footer addSubview:open];
         _stsOpen = open;
 
-        // ③ 状态标签：每次点击都写一行结果，杜绝「按了没反应」的观感
-        UILabel *status = [[UILabel alloc] initWithFrame:CGRectMake(16, 124, w - 32, 46)];
+        // ③ QQ 群：纯异步打开 https 链接，交给系统跳 QQ / Safari
+        UIButton *qq = [[UIButton alloc] initWithFrame:CGRectMake(0, 0, 0, 0)];
+        qq.frame = CGRectMake(16, 126, w - 32, 46);
+        [qq setTitle:@"QQ群：1135135953" forState:0];
+        [qq setTitleColor:[UIColor whiteColor] forState:0];
+        qq.backgroundColor = [UIColor systemOrangeColor];
+        qq.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+        qq.layer.cornerRadius = 10;
+        qq.layer.masksToBounds = YES;
+        [qq addTarget:self action:@selector(qqGroupTapped) forControlEvents:64];
+        [footer addSubview:qq];
+        _stsQQ = qq;
+
+        // ④ 状态标签：每次点击都写一行结果，杜绝「按了没反应」的观感
+        UILabel *status = [[UILabel alloc] initWithFrame:CGRectMake(16, 182, w - 32, 46)];
         status.text = @"输入分钟数并点「应用」即可改变显示的总时长";
         status.textAlignment = 1;   // NSTextAlignmentCenter
         status.textColor = [UIColor darkGrayColor];
@@ -594,9 +619,9 @@ static STSJumpCoordinator *gSTSJumpCoordinator = nil;
         _stsStatus = status;
 
         tv.tableFooterView = footer;
-        NSLog(@"[STS] footer 已挂到 tableFooterView（2 按钮 + 状态标签）, width=%.0f", (double)w);
+        NSLog(@"[STS] footer 已挂到 tableFooterView（3 按钮 + 状态标签）, width=%.0f", (double)w);
         STSPrefsBootLog([NSString stringWithFormat:
-                         @"[UI] footer 已装上（2 按钮 + 状态标签）, width=%.0f", (double)w]);
+                         @"[UI] footer 已装上（3 按钮 + 状态标签）, width=%.0f", (double)w]);
     } @catch (NSException *e) {
         NSLog(@"[STS] 安装 footer 按钮失败: %@", e);
     }
@@ -620,7 +645,8 @@ static STSJumpCoordinator *gSTSJumpCoordinator = nil;
             footer.frame = CGRectMake(0, 0, w, STS_FOOTER_H);
             _stsApply.frame  = CGRectMake(16, 14,  w - 32, 46);
             _stsOpen.frame   = CGRectMake(16, 70,  w - 32, 46);
-            _stsStatus.frame = CGRectMake(16, 124, w - 32, 46);
+            _stsQQ.frame     = CGRectMake(16, 126, w - 32, 46);
+            _stsStatus.frame = CGRectMake(16, 182, w - 32, 46);
         }
     } @catch (NSException *e) {
         NSLog(@"[STS] footer 布局异常: %@", e);
@@ -785,6 +811,39 @@ static STSJumpCoordinator *gSTSJumpCoordinator = nil;
     // → 验证 → 兜底弹窗，全程写 [JUMP] 日志。pop 之后本控制器会被销毁，
     // 因此后续阶段必须挂在协调器上，不能调度到 self。
     [[STSJumpCoordinator shared] startFrom:self];
+}
+
+#pragma mark - QQ 群（v0.6.4）
+
+- (void)qqGroupTapped {
+    STSPrefsBootLog(@"[BUTTON] 「QQ群：1135135953」被点击");
+    // 立即可见反馈：先证明这一下确实按到了
+    [self sts_setStatus:@"正在打开 QQ 群 1135135953…"];
+    @try { [self.view endEditing:YES]; } @catch (NSException *e) {}
+
+    // https 链接交给系统：SpringBoard 会用 Safari / QQ 打开。
+    // 只用纯异步 openURL，绝不调同步 [app openURL:] —— v0.6.3 已证实同步版
+    // 会阻塞主线程等待系统判定，是「按了没反应 / 卡 20 秒」的根因。
+    NSURL *url = nil;
+    @try { url = [NSURL URLWithString:STSQQGroupURLString()]; }
+    @catch (NSException *e) { url = nil; }
+    UIApplication *app = nil;
+    @try { app = [UIApplication sharedApplication]; } @catch (NSException *e) {}
+
+    if (!url || !app) {
+        STSPrefsBootLog(@"[QQ] URL 或 UIApplication 取不到，放弃打开");
+        [self sts_setStatus:@"打开失败：无法创建链接"];
+        return;
+    }
+    @try {
+        [app openURL:url options:@{} completionHandler:^(BOOL ok) {
+            STSPrefsBootLog([NSString stringWithFormat:@"[QQ] openURL 回调 -> %d", ok]);
+        }];
+        STSPrefsBootLog(@"[QQ] QQ 群链接已异步发出（不阻塞主线程）");
+    } @catch (NSException *e) {
+        STSPrefsBootLog(@"[QQ] openURL 异常");
+        [self sts_setStatus:@"打开失败：系统拒绝了链接"];
+    }
 }
 @end
 

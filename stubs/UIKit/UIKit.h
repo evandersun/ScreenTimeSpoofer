@@ -13,6 +13,8 @@
 + (UIColor *)darkGrayColor;
 + (UIColor *)systemBlueColor;
 + (UIColor *)systemGreenColor;
++ (UIColor *)systemOrangeColor;
++ (UIColor *)systemPurpleColor;
 + (UIColor *)secondarySystemBackgroundColor;
 @end
 

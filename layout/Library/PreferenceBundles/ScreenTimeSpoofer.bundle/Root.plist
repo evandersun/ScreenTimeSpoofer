@@ -28,7 +28,7 @@
 		<key>cell</key>
 		<string>PSGroupCell</string>
 		<key>footerText</key>
-		<string>① 填入分钟数后点「应用」；② 点「打开屏幕使用时间」秒级进入该页面查看效果；若系统未响应，会先返回设置首页并弹窗提示</string>
+		<string>① 填入分钟数后点「应用」；② 点「打开屏幕使用时间」秒级进入该页面查看效果（若系统未响应，会先返回设置首页并弹窗提示）；③ 点「QQ群：1135135953」跳转加入交流群</string>
 	</dict>
 </array>
 </plist>
