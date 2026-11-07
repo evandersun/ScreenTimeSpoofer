@@ -1,0 +1,12 @@
+# 构建中间产物
+.build/
+out/
+.theos/
+packages/
+
+# 历史构建产物不入库，只保留根目录当前版本的预编译 deb
+*.deb
+*.zip
+!ScreenTimeSpoofer-0.5.7.deb
+
+.DS_Store

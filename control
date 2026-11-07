@@ -1,0 +1,9 @@
+Package: com.evander.screentimespoofer
+Name: ScreenTimeSpoofer
+Version: 0.5.7
+Architecture: iphoneos-arm64e
+Description: 修改「屏幕使用时间」界面里显示/统计的时长（只改 ScreenTimeUI 渲染层，不动系统数据库）
+Maintainer: evander
+Author: evander
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 15.0)

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>cell</key>
+		<string>PSGroupCell</string>
+		<key>label</key>
+		<string>屏幕使用时间</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSEditTextCell</string>
+		<key>default</key>
+		<real>30.0</real>
+		<key>defaults</key>
+		<string>com.evander.screentimespoofer</string>
+		<key>isNumeric</key>
+		<true/>
+		<key>key</key>
+		<string>TargetMinutes</string>
+		<key>label</key>
+		<string>目标总时长（分钟）</string>
+		<key>placeholder</key>
+		<string>30</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSGroupCell</string>
+		<key>footerText</key>
+		<string>填入分钟数后点「应用」生效，无需重启设置（返回屏幕使用时间页面即可看到）</string>
+	</dict>
+</array>
+</plist>
