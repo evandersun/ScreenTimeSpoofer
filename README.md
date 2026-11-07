@@ -4,11 +4,24 @@
 
 支持 **roothide（Dopamine RootHide 等隐根，默认）**、rootless（Dopamine / palera1n）与 rootful 三种越狱环境，目标 iOS 15 及以上。
 
-> GitHub 仓库：<https://github.com/evandersun/ScreenTimeSpoofer>　|　预编译包下载：<https://github.com/evandersun/ScreenTimeSpoofer/releases/tag/v0.6.3>
+> GitHub 仓库：<https://github.com/evandersun/ScreenTimeSpoofer>　|　**越狱源：`https://evandersun.github.io/`**（Sileo / Zebra / Cydia 添加后直接搜索安装，自动匹配 roothide / rootless）　|　预编译包下载：<https://github.com/evandersun/ScreenTimeSpoofer/releases/tag/v0.6.3>
 
 ---
 
 ## 0. 直接安装（预编译）
+
+### 方式 A：越狱源（推荐）
+
+在 Sileo / Zebra / Cydia / Installer 里添加源 **`https://evandersun.github.io/`**，搜索 `ScreenTimeSpoofer` 直接安装。源里同时收录两个架构，包管理器**按设备架构自动匹配**，不用手动挑：
+
+| 架构 | 适用越狱 |
+|---|---|
+| `iphoneos-arm64e` | **roothide**（Dopamine RootHide 等隐根） |
+| `iphoneos-arm64` | **rootless**（Dopamine / palera1n） |
+
+源仓库：[github.com/evandersun/evandersun.github.io](https://github.com/evandersun/evandersun.github.io)。
+
+### 方式 B：手动下载 deb
 
 `out/` 下有一个已经编好的 **arm64** 包（无根越狱专用）：
 
@@ -27,7 +40,7 @@ ssh root@<设备IP> "dpkg -i /var/root/ScreenTimeSpoofer.deb"
 
 装完 postinst 会自动杀掉设置进程，进「设置 → 屏幕使用时间」就能看到总时长被改成 30 分钟（默认配置）。
 
-同时在「设置」根列表最下方会出现一行 **ScreenTimeSpoofer**，点进去输入分钟数 → 点「应用」即可改时间；页面底部另有**「打开屏幕使用时间」**按钮，点一下直接在「设置」内部进入该页面查看效果；若当前 iOS 不允许自动跳转，会弹窗并提供「返回设置首页」按钮（依赖 PreferenceLoader，Dopamine / palera1n 自带），详见第 3 节。
+同时在「设置」根列表最下方会出现一行 **ScreenTimeSpoofer**，点进去输入分钟数 → 点「应用」即可改时间；页面底部另有**「打开屏幕使用时间」**按钮，点一下约 0.75 秒即在「设置」内部进入该页面查看效果；若当前 iOS 不允许自动跳转，会先返回设置首页并弹窗提示（依赖 PreferenceLoader，Dopamine / palera1n 自带），详见第 3 节。
 
 **装了但没效果**时按顺序查：
 
