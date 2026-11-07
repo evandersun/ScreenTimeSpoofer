@@ -10,6 +10,10 @@
 #ifndef STSConstants_h
 #define STSConstants_h
 
+/// 版本号：boot 日志首行与设置页日志共用。每次发版只改这一处，
+/// 这样从设备上抓回来的日志能直接判断到底装的是哪一版（旧 dylib 残留时尤其重要）。
+#define STS_VERSION "0.6.3"
+
 /// 配置文件（相对 JB 根，rootless 下会自动补 /var/jb 前缀）
 #define STS_CONFIG_REL_PATH        @"/var/mobile/Library/Preferences/com.evander.screentimespoofer.plist"
 /// 探针日志（相对 JB 根）

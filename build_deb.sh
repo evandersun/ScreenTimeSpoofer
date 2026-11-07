@@ -19,7 +19,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 NAME=ScreenTimeSpoofer
-STUB=${STUB:-/tmp/iosstub}
+# 桩头随仓库一起发布，clone 下来就能直接构建；需要外部桩头时用 STUB=/path/to/stubs 覆盖
+STUB=${STUB:-$(dirname "$0")/stubs}
 BUILD=.build
 OUT=out
 MIN_IOS=15.0
@@ -37,7 +38,8 @@ grep -Eq 'Class[[:space:]]+isa;' "$STUB/Foundation/Foundation.h" || {
 
 # -fobjc-exceptions：源码里用 @try/@catch 兜住私有框架的异常，必须有这个开关
 CFLAGS="-target arm64-apple-ios$MIN_IOS -fobjc-arc -fobjc-runtime=ios-$MIN_IOS \
-        -fobjc-exceptions -nostdinc -isystem $STUB -I. -O2 -Wall -Wextra -Wno-unused-parameter"
+        -fobjc-exceptions -nostdinc -isystem $STUB -I. -O2 -Wall -Wextra \
+        -Wno-unused-parameter -Wno-deprecated-declarations"
 
 rm -rf "$BUILD" "$OUT"
 mkdir -p "$BUILD" "$OUT"
@@ -108,17 +110,23 @@ package() {
     # 版本/依赖统一取自项目根目录的 control，只按打包变体覆盖 Architecture
     sed -e "s/^Architecture:.*/Architecture: $arch/" control > "$debdir/DEBIAN/control"
 
-    # 0.5.3：安装「解压文件之前」先清掉设备上所有残留的旧副本。
-    # 现象：装了新版，崩溃栈里却还是旧版 dylib（UUID/镜像大小都不符）——说明
-    # 旧文件没被覆盖，libinjector 仍注入旧的那个。这里提前全盘清理同名文件，
-    # 保证最终被注入的一定是本包自带的版本。
+    # 0.5.9：只清理「已知安装位置」的旧残留，几个 rm 常数时间完成。
+    # 0.5.3~0.5.8 这里用 find 扫 /var/containers/Bundle/Application（数万文件），
+    # 而且 /var 与 /private/var 在 iOS 上是同一目录，等于扫了两遍 —— 这就是
+    # 前几版 unpack 卡几十秒的原因。文件冲突改由 control 的 Replaces 处理。
     cat > "$debdir/DEBIAN/preinst" <<'EOF'
 #!/bin/sh
-for dir in /var/jb /var/containers/Bundle/Application /private/var/containers/Bundle/Application; do
-    [ -d "$dir" ] || continue
-    find "$dir" -maxdepth 8 \
-        \( -name 'ScreenTimeSpoofer.dylib' -o -name 'ScreenTimeSpoofer.plist' \) \
-        -delete 2>/dev/null
+# roothide 下 /Library/... 由 libjbroot 自动映射到随机 jbroot；rootless 用 /var/jb 前缀。
+for root in "" "/var/jb"; do
+    for f in \
+        "$root/Library/MobileSubstrate/DynamicLibraries/ScreenTimeSpoofer.dylib" \
+        "$root/Library/MobileSubstrate/DynamicLibraries/ScreenTimeSpoofer.plist" \
+        "$root/Library/PreferenceLoader/Preferences/ScreenTimeSpoofer.plist" \
+        "$root/Library/PreferenceBundles/ScreenTimeSpoofer.bundle/ScreenTimeSpoofer" \
+        "$root/Library/PreferenceBundles/ScreenTimeSpoofer.bundle/Info.plist" \
+        "$root/Library/PreferenceBundles/ScreenTimeSpoofer.bundle/Root.plist"; do
+        rm -f "$f" 2>/dev/null
+    done
 done
 exit 0
 EOF

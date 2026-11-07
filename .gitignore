@@ -7,6 +7,6 @@ packages/
 # 历史构建产物不入库，只保留根目录当前版本的预编译 deb
 *.deb
 *.zip
-!ScreenTimeSpoofer-0.5.7.deb
+!ScreenTimeSpoofer-0.6.3.deb
 
 .DS_Store

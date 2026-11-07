@@ -4,7 +4,7 @@
 
 支持 **roothide（Dopamine RootHide 等隐根，默认）**、rootless（Dopamine / palera1n）与 rootful 三种越狱环境，目标 iOS 15 及以上。
 
-> GitHub 仓库：<https://github.com/evandersun/ScreenTimeSpoofer>　|　预编译包下载：<https://github.com/evandersun/ScreenTimeSpoofer/releases/tag/v0.5.7>
+> GitHub 仓库：<https://github.com/evandersun/ScreenTimeSpoofer>　|　预编译包下载：<https://github.com/evandersun/ScreenTimeSpoofer/releases/tag/v0.6.3>
 
 ---
 
@@ -27,7 +27,7 @@ ssh root@<设备IP> "dpkg -i /var/root/ScreenTimeSpoofer.deb"
 
 装完 postinst 会自动杀掉设置进程，进「设置 → 屏幕使用时间」就能看到总时长被改成 30 分钟（默认配置）。
 
-同时在「设置」根列表最下方会出现一行 **ScreenTimeSpoofer**，点进去输入分钟数 → 点「应用」即可改时间（依赖 PreferenceLoader，Dopamine / palera1n 自带），详见第 3 节。
+同时在「设置」根列表最下方会出现一行 **ScreenTimeSpoofer**，点进去输入分钟数 → 点「应用」即可改时间；页面底部另有**「打开屏幕使用时间」**按钮，点一下直接在「设置」内部进入该页面查看效果；若当前 iOS 不允许自动跳转，会弹窗并提供「返回设置首页」按钮（依赖 PreferenceLoader，Dopamine / palera1n 自带），详见第 3 节。
 
 **装了但没效果**时按顺序查：
 
@@ -152,6 +152,123 @@ cat /var/mobile/Library/Logs/ScreenTimeSpoofer-boot.log
 ```
 
 把内容发我即可定位。
+
+### v0.6.3：把「一键跳转」从 20 多秒压到 1 秒内
+
+v0.6.2 已经能跳转成功，但从点按钮到页面出现要 **20 多秒**。根因不在页面本身，而在跳转协调器的 URL 阶段：
+
+- `STSSendURLSchemes` 对 **7 个候选 URL 每个都同时调用异步版和同步 `[app openURL:u]`**，还额外直投 AppDelegate —— 共 14+ 次 `openURL`。其中 `x-apple.systempreferences:` 是 macOS scheme、带 `&path=` 的在 iOS 上无效。
+- **同步 `openURL:` 会阻塞主线程**等待 SpringBoard 判定/超时（无效 scheme 尤其慢）。主线程被卡住后，连 `performSelector:afterDelay:` 的定时器也一起排队 —— 所以明明各阶段延迟加起来只有 2.1 秒，实际要等二十几秒才动。
+- 多个 URL 陆续被系统处理，还可能让页面反复加载/卸载（`ScreenTimeSettingsUI` 有 169 个类需懒加载），进一步放大延迟。
+
+修法（**跳转路径顺序不变，只消除阻塞与等待**）：
+
+| 改动 | v0.6.2 | v0.6.3 |
+|---|---|---|
+| URL 候选 | 7 个 | **2 个**（`App-prefs:SCREEN_TIME` / `prefs:root=SCREEN_TIME`） |
+| `openURL:` 调用 | 每候选同步 + 异步 + AppDelegate 直投 | **仅纯异步一次**，删掉同步与直投 |
+| pop 回首页 | 先等 0.9 秒验证 URL 再 pop | **立即 pop**（`animated:NO`），省掉动画与等待 |
+| didSelect 延迟 | 0.9 + 0.5 = 1.4 秒后 | **0.25 秒**后 |
+| 最终验证 | + 0.7 秒 | **+ 0.5 秒** |
+| 理论总耗时 | ~2.1 秒（实测 20+ 秒） | **~0.75 秒** |
+
+- **每条 `[JUMP]` 日志自动带 `[+X.XXs]` 相对耗时**（纯 C `gettimeofday`，不引入 libdispatch 依赖）。抓一次日志就能看出时间花在 URL、pop、还是遍历表格。
+- 遍历首页表格上限收紧（sections 40→30、rows 120→60），避免逐格 `cellForRowAtIndexPath:` 拖慢。
+- **保留全部已验证有效的路径**：`didSelect` 仍是主路径（不依赖深链）、pop 保证可见变化、弹窗兜底保证有反馈。删掉的 5 个候选与同步调用都不是跳转生效所必需。
+
+> 验证：装完点一次跳转按钮，抓 `ScreenTimeSpoofer-boot.log`，看 `[JUMP]` 各行的时间戳 —— 从 `[+0.00s] 开始` 到 `[JUMP] ✔ 已进入` 应在一秒左右。若某段仍慢，日志会直接指出是哪一段。
+
+- 版本 `0.6.3`。
+
+### v0.6.2：修「一键跳转」按钮用不了（多阶段跳转协调器）
+
+先纠正两个此前的误判：
+
+1. **`boot(8).log` 里根本没有 `[BUTTON] 「打开屏幕使用时间」被点击`、也没有任何 `[NAV]` 行** —— 那次是按上一轮指引「手动从设置首页点进去」抓的日志，压根没点跳转按钮，所以覆盖不到按钮。改时长功能其实已经生效（`STUsageReport totalScreenTime 34570 -> 1200`，iOS 16 上顶部显示 20 分钟）。
+2. **「iOS 15+ 没有公开深链」是错的**。查证后确认 `prefs:root=SCREEN_TIME` / `App-Prefs:root=SCREEN_TIME` / `App-prefs:SCREEN_TIME` 在 iOS 16/17 上有效（多份 URL 清单 + iOS 17.3 实测可打开 Screen Time）。v0.6.0 据此把 URL 路径判死刑，方向就偏了。
+
+**真正的根因**：v0.6.0/0.6.1 是在「插件设置页」（导航栈栈顶）里，去调用**栈底「设置首页」控制器**的 `tableView:didSelectRowAtIndexPath:`。那一刻首页不是 active / `topViewController`，Preferences 的 `PSListController` 会直接忽略这次选中 —— 页面纹丝不动。v0.6.1 只补了日志、没动这个逻辑，等于没修。
+
+重写为**串行多阶段协调器**，每阶段都写 `[JUMP]` 日志并验证是否真的进了新页面：
+
+- **A. URL 深链**：7 个候选（含 `App-prefs:SCREEN_TIME`），以 `openURL:options:completionHandler:` 异步版为主，同步版 + 直接投递 AppDelegate 为辅；回调只记日志不据此判成败。
+- **B. 0.9 秒后验证栈顶**：没进去就 `popToRootViewControllerAnimated:` 回设置首页 —— 这一步 100% 有效，既是可见变化，也让首页变成 active。
+- **C. 首页 active 后再触发**「屏幕使用时间」那一行的 `didSelect` —— 这次才会真正 push。标题匹配不再只读 `textLabel`：递归收集 cell 内所有 `UILabel` 文本 + `accessibilityLabel`（iOS 16 设置首页是自定义 cell，只看 `textLabel` 会漏）。
+- **D. 再验证**；仍未进去才用 `UIAlertView`（自己找 window，不依赖 presenting 层级）弹窗提示手动进入。
+
+关键工程细节：pop 之后插件页 `self` 会被销毁，**延迟任务不能再调度到 self**，所以全部挂在独立单例 `STSJumpCoordinator`（强引用持有 `nav` 与首页控制器）上，用 `performSelector:withObject:afterDelay:` 串行推进。桩头 `Foundation.h` 补了该 API 声明。
+
+- 版本 `0.6.2`。抓日志时点一下跳转按钮，看 `[BUTTON]` 与 `[JUMP]` 各阶段结果即可定位。
+
+### v0.6.1：定位「被调用=0」—— 框架懒加载诊断闭环
+
+用户回传的 `ScreenTimeSpoofer-boot(7).log` 最后三行是：
+
+```text
+## 8 秒统计：hooked=8 被调用=0 被改写=0
+## 生效参数：mode=target target=20.0min scale=0.200 原始总时长=0.0min 系数=0.2000 缩放分项=0
+## 结论：已挂上，但界面没有调用这些 getter —— 显示数据来自其它类
+```
+
+`原始总时长=0.0min` 说明**总时长基准从未被设置过**，也就是改时长的代码一次都没触发。但把这份日志直接读成「hook 挂错类」是错的，有两个更前置的原因：
+
+1. **它其实不是按钮日志**。这是 dylib 的启动自检日志，设置页按钮的所有诊断原本只走 `NSLog`（系统 syslog），boot.log 里一个字都没有 —— 所以「按钮按了没反应」和「hook 没生效」两件事一直分不清。
+2. **日志第 8 行写明：启动时只加载了 `ScreenTimeUICore / ScreenTimeCore / ScreenTimeFoundation` 三个框架**。「设置 → 屏幕使用时间」页面用的 `ScreenTimeSettingsUI` 之类是**点进页面才懒加载**的。插件在设置刚启动就扫完，挂上的 8 个 getter 全在 `UsageTracking` 的模型类里，那个页面根本不调它们。而「8 秒统计」是启动后自动打的，那时用户还停在插件设置页（按钮进不去），零调用是必然的。
+
+另外首行 `ScreenTimeSpoofer 0.5.6 boot` 是**从 0.5.6 起一直没改的硬编码字符串**，不能用来判断设备装的是哪一版 —— 之前多次「旧 dylib 残留」都栽在这上面。
+
+这一版的修法（**不猜新的 hook 目标，先把真相拿到**）：
+
+- **框架懒加载即时感知**：每 0.5 秒轮询 dyld 镜像表，一旦发现新的 ScreenTime / UsageTracking / FamilyControls / ManagedSettings / DeviceActivity 框架加载，立刻全量 dump 它的类名与「名字像时长」的零参方法 —— **包含返回 `NSString` 的格式化 getter**（界面上的「3 小时 18 分钟」很可能就是它，旧版 dump 只列数值返回值，把它整个漏掉了）。同一次重扫随即把新框架里符合规则的类挂上。不用 `_dyld_register_func_for_add_image`：那个回调在 dyld 阶段触发，0.5.0 曾因回调里解析不到 `dispatch_get_main_queue` 直接 abort；轮询只在自建串行队列里跑。
+- **设置页按钮写进同一份 boot.log**：`[BUTTON]`、`[NAV]`、`[APPLY]`、`[UI]`、`[BUNDLE]` 前缀记录按钮点击、进程内导航每一步、footer 是否装上、写入结果、bundle 版本。以后只需抓**一份日志**就能判断按钮到底按没按到、走到哪一步。
+- **8 秒统计改成 8/20/45/90 秒各打一次累计值**，每次都列出此刻已加载的相关框架 —— 用来判断用户到底进没进「屏幕使用时间」页面。
+- **boot 首行带真实版本号**（`STS_VERSION` 宏，`STSConstants.h` 一处定义，dylib 与设置页共用）。
+
+**怎么配合验证（很关键）**：装完 → 打开「设置」→ 点插件页 → 点「应用」→ **手动从设置首页点进「屏幕使用时间」（按钮不好使也没关系）** → 停留 5 秒以上 → 重新抓 `ScreenTimeSpoofer-boot.log`。日志里如果出现 `★ 检测到懒加载框架：.../ScreenTimeSettingsUI.framework/...`，后面就会跟着那个页面真正用到的类与方法清单；下一版就能精准挂钩，不用再盲猜。
+
+- 版本 `0.6.1`。
+
+### v0.6.0：修「打开屏幕使用时间」按钮按了没反应
+
+v0.5.8 加的跳转按钮点了完全没动静，三个原因叠在一起：
+
+1. **深链本身不成立**：`prefs:root=SCREEN_TIME` / `App-Prefs:` 这类 URL 是给「外部 App 跳进设置」用的，而本插件就跑在 `com.apple.Preferences` **进程内部** —— 让设置 App 自己 `openURL` 自己基本是 no-op；而且 Apple 从未开放 Screen Time 的公开 `prefs:root` 路径（iOS 15+ 尤其如此，它已改成 `ScreenTimeSettingsUI` 私有框架懒加载的 cell）。
+2. **把 `openURL:` 返回 `YES` 当成成功**：那个 `YES` 只表示「系统受理了这个 URL 请求」，不代表真的跳过去了。旧代码一拿到 `YES` 就 `break` + `return`，静默收场。
+3. **异步兜底分支也不给反馈**：`openURL:options:completionHandler:` 之后直接 `return`，连弹窗都没有 —— 注释写的是「怕提示框盖住可能已经跳过去的页面」，结果就是三条路全静默。
+
+修法（跳转逻辑重写）：
+
+- **主路径改成「进程内直接导航」**：本设置页是从「设置」首页 push 进来的，导航栈里就有首页控制器和它的表格。遍历各层 `UITableView` 的 dataSource 找标题为「屏幕使用时间」（含中/英/日/韩/繁中等多语言）的那一行，调首页表格 delegate 的 `tableView:didSelectRowAtIndexPath:` —— **与用户手指点一下完全等价**，由 Preferences 框架自己完成 lazy bundle 加载与 push。不依赖任何 URL scheme、不依赖任何私有控制器类名，也不会因 iOS 小版本改类名而失效。
+  - 遍历时**排除本插件自己的页面**（它的分组头也叫「屏幕使用时间」，误命中就白点了）。
+  - 调完 `didSelect` **校验导航栈层数是否增加**，只有真的 push 了才算成功 —— 避免重蹈「以为成功就静默返回」的覆辙；没 push 就继续走后面的兜底路径。
+- 深链降级为辅助：`openURL:` 全候选 + 直接投递给 Preferences 的 AppDelegate（`application:openURL:options:` 等）+ 异步版都还试一遍，但**不管返回什么都不静默收场**。
+- **保证任何情况都有可见反应**：footer 新增状态标签，点击瞬间写「正在打开…」；进程内导航失败后弹窗说明原因，并带一个 **「返回设置首页」** 按钮（`popToRootViewControllerAnimated:`，100% 有效）—— 用户回到首页手动点一下即可，比对着没变化的屏幕强。弹窗 `UIAlertController` 失败时用 `UIAlertView` 兜底。
+- 「应用」按钮同步加状态标签反馈，避免弹窗被系统吞掉时同样表现为「没反应」。
+- `stubs/UIKit/UIKit.h` 补 `UINavigationController` / `NSIndexPath` / `UITableView` 数据源方法 / `UILabel.numberOfLines` / `UIAlertView` 等声明。
+- 版本 `0.6.0`。
+
+### v0.5.9：修 dpkg 覆盖冲突 + 安装提速（无功能性改动）
+
+装 0.5.8 时报错：
+
+```text
+dpkg: error processing archive ... (--unpack):
+ trying to overwrite '/Library/MobileSubstrate/DynamicLibraries/ScreenTimeSpoofer.dylib',
+ which is also in package com.example.screentimepoofer 0.5.6
+```
+
+原因是 0.5.7 把包名从 `com.example.screentimepoofer` 改成 `com.evander.screentimespoofer`，但设备上旧包没卸载 —— 两个包都声明同一批文件，dpkg 拒绝覆盖。
+
+- `control` 增加 **`Replaces: com.example.screentimepoofer`**：dpkg 允许覆盖，并把这些文件的所有权从旧包转移到新包（之后卸载旧包不会误删新文件）。
+- 顺带修掉「前几版 unpack 很慢」：`preinst` 从 0.5.3 起用 `find` 扫 `/var/containers/Bundle/Application`（数万文件），`/var` 与 `/private/var` 又是同一目录，等于扫两遍，每装一版都要卡几十秒。现在只 `rm` 几个已知安装路径，常数时间完成，文件冲突交给 `Replaces` 处理。
+- 版本 `0.5.9`；装完可选 `dpkg -r com.example.screentimepoofer` 清掉旧包记录。
+
+### v0.5.8：设置页新增「打开屏幕使用时间」按钮
+
+- footer 从 1 个按钮改成 2 个：上「应用」、下「打开屏幕使用时间」，点后者直接跳到系统的「设置 → 屏幕使用时间」，省掉手动返回首页再点一次。
+- 跳转走系统设置深链（`prefs:root=SCREEN_TIME` / `App-Prefs:root=SCREEN_TIME` 等 5 个候选逐个尝试），**不依赖任何私有控制器类名**，不会因 iOS 小版本改类名而失效；同步 `openURL:` 全失败时再用 `openURL:options:completionHandler:` 兜一次。
+- 编译桩头从沙箱临时目录搬进仓库 `stubs/`，`build_deb.sh` 默认使用它 —— clone 下来直接 `./build_deb.sh` 即可构建，不再依赖外部 SDK/桩头。
+- 版本 `0.5.8`。
 
 ### v0.5.7：包名 / 架构标识调整（无功能性改动）
 
@@ -589,7 +706,7 @@ make clean && make package      # Makefile 已默认 roothide + ARCHS="arm64 arm
 | `THEOS_PACKAGE_SCHEME` | `roothide` | 默认隐根包（rootful 式绝对路径 + `iphoneos-arm64e` + .jbroot 链接）；rootless 用 `make THEOS_PACKAGE_SCHEME=rootless`，rootful 用 `make THEOS_PACKAGE_SCHEME=rootful` |
 | `SUBPROJECTS` | `prefs` | 一并编译设置页 bundle（见 `prefs/Makefile`） |
 
-产物在 `packages/com.evander.screentimespoofer_0.5.7_iphoneos-arm64e.deb`。
+产物在 `packages/com.evander.screentimespoofer_0.6.3_iphoneos-arm64e.deb`。
 
 > `control` 里的 `Package` / `Maintainer` / `Author` 已设为 `com.evander.screentimespoofer` / `evander`；如果要发布自己的分支，记得先换掉，否则会和已有包冲突。
 
@@ -685,6 +802,21 @@ killall -9 Preferences
 ---
 
 ## 8. 常见问题
+
+**装包报 `trying to overwrite '.../ScreenTimeSpoofer.dylib', which is also in package com.example.screentimepoofer`**
+0.5.7 改包名后，旧包还装着就会和新包声明同一批文件。0.5.9 起 `control` 加了 `Replaces: com.example.screentimepoofer`，dpkg 允许覆盖；想彻底干净，装完执行 `dpkg -r com.example.screentimepoofer`。
+
+**boot 日志显示 `被调用=0 被改写=0` / `原始总时长=0.0min`**
+先别急着下「hook 挂错类」的结论：这份是启动自检日志，8 秒统计时你多半还停在插件设置页、没进「屏幕使用时间」页面，而那个页面用的私有框架是点进去才懒加载的。v0.6.1 起会实时检测新框架并全量 dump，统计也改成 8/20/45/90 秒多次。请装完手动进入那个页面停 5 秒再抓日志，看有没有 `★ 检测到懒加载框架` 以及 `[BUTTON] / [NAV]` 前缀的行：没有 `[BUTTON]` 说明按钮根本没装上或没绑事件，有 `[NAV] 成功` 却仍零调用才是数据源确实不同。另外日志首行的版本号现在是真实的（`0.6.1`），可用来确认是否加载了旧 dylib。
+
+**能跳转，但要等 20 多秒**
+v0.6.2 对 7 个 URL 候选逐个调同步 `openURL:`，无效 scheme 会阻塞主线程等待系统判定，连延迟定时器一起被拖住。v0.6.3 起只发 2 个纯异步深链、立即 `animated:NO` pop 回首页、0.25 秒后 didSelect、0.5 秒后验证，总耗时约 0.75 秒；`[JUMP]` 日志带 `[+X.XXs]` 时间戳可直接定位残留卡顿。
+
+**点「打开屏幕使用时间」按钮没反应 / 用不了**
+v0.6.0/0.6.1 的根因是：在插件页（栈顶）去调栈底设置首页的 `didSelectRowAtIndexPath:`，首页不是 active 控制器，Preferences 直接忽略 —— 页面纹丝不动。v0.6.2 起改成多阶段协调器：先发 `prefs:` / `App-Prefs:` 深链（iOS 16/17 有效，此前误判为不可用）→ 没进去就 pop 回设置首页让首页 active → 再触发那一行 → 每步验证并写 `[JUMP]` 日志 → 全失败才弹窗。抓取 boot 日志点一次按钮，看 `[BUTTON]` 和 `[JUMP]` 各阶段结果即可定位；最坏情况也会先返回设置首页，「屏幕使用时间」行就在眼前。已应用的时长在重新进入该页面后生效。
+
+**安装时 unpack 卡很久**
+0.5.3~0.5.8 的 `preinst` 用 `find` 扫 `/var/containers/Bundle/Application`（数万文件，且 `/var` 与 `/private/var` 是同一目录被扫两遍）。0.5.9 改成只删几个已知路径，安装恢复到秒级。
 
 **数字翻倍 / 变成平方数**
 说明某条聚合路径既挂了子项又挂了聚合值。把 `AggregateClass` 对应的类加进 `ExcludeClasses`，或在 `DurationSelectors` 里去掉 `totalUsage`，只留具体类上的 getter。

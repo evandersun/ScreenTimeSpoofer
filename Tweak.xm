@@ -21,6 +21,7 @@
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import "STSConfig.h"
+#import "STSConstants.h"
 
 #pragma mark - 纯 C 日志（不依赖 Foundation / 配置）
 
@@ -412,75 +413,112 @@ static void STSScanAll(void) {
     }
 }
 
-#pragma mark - 候选方法 dump（版本适配用）
+#pragma mark - 框架懒加载检测 + 全量 dump（0.6.1）
 
-/// 把 ScreenTime 镜像里所有「ST* 类 + 零参 + 返回数值 + 名字像时长」的方法写进日志，
-/// 这样即使 0 命中，也能从日志看出真实方法名，下一次精准适配。
-static void STSDumpCandidates(void) {
+// 0.6.1 核心：boot(7).log 显示「hooked=8 被调用=0 被改写=0」，结论是
+// 「显示数据来自其它类」。但更根本的问题是：插件在「设置」刚启动时就扫完，
+// 那时「设置 → 屏幕使用时间」页面用的私有框架（ScreenTimeSettingsUI 等）还没
+// 被懒加载，日志第 8 行「启动时已加载 ScreenTime 镜像」只有 3 个就是证据。
+// 挂上的 8 个 getter 全在 ScreenTimeCore / UsageTracking 的模型类里，那个页面
+// 根本不调它们 —— 于是永远零调用，日志也永远列不出真正的数据类。
+//
+// 这一版：每 0.5 秒轮询 dyld 镜像表，一旦发现新的 ScreenTime 相关框架出现，
+// 立刻全量 dump 它的类名与「名字像时长」的零参方法（含返回 NSString 的格式化
+// getter，不限数值返回值），并让同一次重扫把新类挂上。
+// 不用 _dyld_register_func_for_add_image：那个回调在 dyld 阶段触发，0.5.0 曾因
+// 回调里解析不到 dispatch_get_main_queue 直接 abort；轮询只在自建队列里跑，零风险。
+
+static NSMutableSet<NSString *> *gSTSKnownImages = nil;
+
+/// dump 用的镜像筛选比 hook 更宽：多列几个框架，便于看出真正的数据类在哪。
+/// hook 仍只覆盖 ScreenTime* / UsageTracking（见 STSIsScreenTimeImage）。
+static BOOL STSIsDumpTargetImage(const char *p) {
+    if (!p || !strstr(p, "/System/Library/PrivateFrameworks/")) return NO;
+    return (strstr(p, "ScreenTime") || strstr(p, "UsageTracking") ||
+            strstr(p, "FamilyControls") || strstr(p, "ManagedSettings") ||
+            strstr(p, "DeviceActivity")) ? YES : NO;
+}
+
+/// 纯 C 版「名字像时长」，大小写不敏感。故意放宽到 formatted / time / elapsed，
+/// 因为界面显示的「3 小时 18 分钟」很可能是返回 NSString 的格式化 getter，
+/// 旧版 dump 只列数值返回值，把它整个漏掉了。
+static BOOL STSDurationLikeC(const char *name) {
+    if (!name) return NO;
+    char buf[256];
+    unsigned long n = strlen(name);
+    if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+    for (unsigned long i = 0; i < n; i++) {
+        char c = name[i];
+        buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+    }
+    buf[n] = 0;
+    static const char *keys[] = {
+        "usage", "duration", "second", "minute", "hour", "screentime",
+        "timespent", "timeused", "totaltime", "timeinterval", "formatted",
+        "elapsed", "spent", "budget", "screen", "time", NULL
+    };
+    for (int i = 0; keys[i]; i++) if (strstr(buf, keys[i])) return YES;
+    return NO;
+}
+
+/// dump 单个镜像：全部类名（紧凑）+ 所有「名字像时长」的零参方法及其返回类型。
+static void STSDumpImageFull(NSString *imagePath) {
     @try {
+        const char *img = [imagePath UTF8String];
+        if (!img) return;
+        unsigned int cc = 0;
+        const char **cn = objc_copyClassNamesForImage(img, &cc);
         NSMutableString *out = [NSMutableString string];
-        // 0.4.0：先列出所有 ScreenTime/UsageTracking 镜像的类名，确认真实类名是否符合预期
-        [out appendString:@"\n## ScreenTime 镜像类名清单："];
-        uint32_t clsImageCount = _dyld_image_count();
-        for (uint32_t i = 0; i < clsImageCount; i++) {
-            const char *img = _dyld_get_image_name(i);
-            if (!img || (!strstr(img, "ScreenTime") && !strstr(img, "UsageTracking"))) continue;
-            unsigned int cc = 0;
-            const char **cn = objc_copyClassNamesForImage(img, &cc);
-            if (!cn) continue;
-            [out appendFormat:@"\n[%s] %u 个类:", img, cc];
-            for (unsigned int k = 0; k < cc && k < 60; k++) {
-                [out appendFormat:@" %s", cn[k]];
-            }
-            if (cc > 60) [out appendFormat:@" …(共%u个)", cc];
-            free(cn);
-        }
-        // 0.5.2：不再只列「名字像时长」的方法。若真实 getter 命名不符合启发式，
-        // 之前会完全看不到它，导致无法适配。现在列出全部零参数数值 getter。
-        [out appendString:@"\n\n## 候选方法（ScreenTime 镜像 · 零参 · 返回数值 · 全量）"];
+        [out appendFormat:@"\n## 框架全量清单：%@  [%u 个类]", imagePath, cc];
+        if (!cn) { STSLogLine(out); return; }
 
-        uint32_t imageCount = _dyld_image_count();
+        [out appendString:@"\n  类："];
+        for (unsigned int j = 0; j < cc && j < 200; j++) {
+            [out appendFormat:@" %s", cn[j]];
+        }
+        if (cc > 200) [out appendFormat:@" …(共%u个)", cc];
+
         int lines = 0;
-        for (uint32_t i = 0; i < imageCount; i++) {
-            const char *image = _dyld_get_image_name(i);
-            if (!image || !strstr(image, "ScreenTime")) continue;
-
-            unsigned int classCount = 0;
-            const char **names = objc_copyClassNamesForImage(image, &classCount);
-            if (!names) continue;
-
-            for (unsigned int j = 0; j < classCount && lines < 240; j++) {
-                Class cls = objc_getClass(names[j]);
-                if (!cls) continue;
-                unsigned int methodCount = 0;
-                Method *methods = class_copyMethodList(cls, &methodCount);
-                if (!methods) continue;
-
-                BOOL headerWritten = NO;
-                for (unsigned int k = 0; k < methodCount; k++) {
-                    if (method_getNumberOfArguments(methods[k]) != 2) continue;
-                    char ret[16] = {0};
-                    method_getReturnType(methods[k], ret, sizeof(ret));
-                    if (!strchr("dqQ@", ret[0])) continue;
-
-                    NSString *sn = NSStringFromSelector(method_getName(methods[k]));
-
-                    if (!headerWritten) {
-                        [out appendFormat:@"\n%s", names[j]];
-                        headerWritten = YES;
-                    }
-                    [out appendFormat:@"\n   - %@ (%c)", sn, ret[0]];
-                    lines++;
-                }
-                free(methods);
+        for (unsigned int j = 0; j < cc && lines < 400; j++) {
+            Class cls = objc_getClass(cn[j]);
+            if (!cls) continue;
+            unsigned int mc = 0;
+            Method *ms = class_copyMethodList(cls, &mc);
+            if (!ms) continue;
+            BOOL header = NO;
+            for (unsigned int k = 0; k < mc && lines < 400; k++) {
+                if (method_getNumberOfArguments(ms[k]) != 2) continue;  // 零参
+                const char *sn = sel_getName(method_getName(ms[k]));
+                if (!STSDurationLikeC(sn)) continue;
+                char ret[32] = {0};
+                method_getReturnType(ms[k], ret, sizeof(ret));
+                if (!header) { [out appendFormat:@"\n  %s:", cn[j]]; header = YES; }
+                [out appendFormat:@"\n     - %s (%s)", sn, ret];
+                lines++;
             }
-            free(names);
+            free(ms);
         }
-        [out appendFormat:@"\n（候选共 %d 条；若为 0，说明类名/方法名与预期差异大）", lines];
+        [out appendFormat:@"\n  （时长相关零参方法 %d 条；返回 @ 的是字符串/对象，v/V 是 void）", lines];
+        free(cn);
         STSLogLine(out);
     } @catch (NSException *e) {
-        STSLogLine([NSString stringWithFormat:@"candidate dump exception: %@", e.name]);
+        STSLogLine([NSString stringWithFormat:@"## dump 镜像异常：%@ %@", e.name, e.reason]);
     }
+}
+
+/// 返回「本次还没 dump 过」的目标框架镜像路径。
+static NSArray<NSString *> *STSFreshScreenTimeImages(void) {
+    NSMutableArray *fresh = [NSMutableArray array];
+    uint32_t n = _dyld_image_count();
+    for (uint32_t i = 0; i < n; i++) {
+        const char *p = _dyld_get_image_name(i);
+        if (!STSIsDumpTargetImage(p)) continue;
+        NSString *key = [NSString stringWithUTF8String:p];
+        if (!key || [gSTSKnownImages containsObject:key]) continue;
+        [gSTSKnownImages addObject:key];
+        [fresh addObject:key];
+    }
+    return fresh;
 }
 
 #pragma mark - 入口
@@ -510,6 +548,14 @@ static void STSScheduleRescan(void) {
                    STSWorkQueue(), ^{
         @autoreleasepool {
             @try {
+                // 0.6.1：先看有没有新的 ScreenTime 相关框架被懒加载（用户点进
+                // 「屏幕使用时间」页面时才会出现）。有就立刻全量 dump，让日志
+                // 能列出那个页面真正用到的数据类，然后本次重扫就能把它们挂上。
+                NSArray<NSString *> *fresh = STSFreshScreenTimeImages();
+                for (NSString *img in fresh) {
+                    STSLogLine([NSString stringWithFormat:@"## ★ 检测到懒加载框架：%@", img]);
+                    STSDumpImageFull(img);
+                }
                 unsigned long before = gSTSHookedKeys ? gSTSHookedKeys.count : 0;
                 STSScanAll();
                 unsigned long after = gSTSHookedKeys ? gSTSHookedKeys.count : 0;
@@ -531,7 +577,8 @@ static void STSScheduleRescan(void) {
 // 的 retain，都是同一对象布局错误的表现。桩头已补齐 isa，并修正 arm64 BOOL 为 _Bool。
 // 保留延迟初始化：elaKit 注入期间主线程仍在 dyld，推迟到后台执行更稳妥。
 __attribute__((constructor)) static void STSInit(void) {
-    STSRawWrite("# ===== ScreenTimeSpoofer 0.5.6 boot =====", 1);
+    // 字符串字面量拼接，纯 C：日志首行带真实版本号，便于判断设备是否加载了旧 dylib。
+    STSRawWrite("# ===== ScreenTimeSpoofer " STS_VERSION " boot =====", 1);
 }
 
 @interface STSBootstrap : NSObject
@@ -566,6 +613,7 @@ static void STSRealInit(void) {
         @try {
             STSStep("STEP: gSTSHookedKeys init");
             gSTSHookedKeys = [NSMutableSet set];
+            gSTSKnownImages = [NSMutableSet set];   // 0.6.1：记录已 dump 过的框架镜像
 
             // 总时长基准选择器（SEL 全局唯一，指针比较即可，不依赖 plist 里可能过期的类名）
             gSelTotalScreenTime = sel_registerName("totalScreenTime");
@@ -656,41 +704,57 @@ static void STSRealInit(void) {
     }
     STSScheduleRescan();
 
-    // 3) 进程稳定后再 dump 候选方法（一次性，定位真实方法名用）
+    // 3) 框架 dump 已并入 0.5 秒周期重扫（见 STSScheduleRescan），这里只留一行标记
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * (double)NSEC_PER_SEC)),
                    STSWorkQueue(), ^{
-        @try {
-            STSDumpCandidates();
-        } @catch (NSException *e) {
-            STSLogLine([NSString stringWithFormat:@"## dump 异常：%@ %@", e.name, e.reason]);
-        }
+        STSLogLine(@"## 启动 3 秒：初始框架 dump 已完成；之后每有框架懒加载会实时追加清单");
     });
 
-    // 4) 8 秒后汇总一次「是否真的被界面调用过」
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * (double)NSEC_PER_SEC)),
-                   STSWorkQueue(), ^{
-        @try {
-            STSLogLine([NSString stringWithFormat:@"## 8 秒统计：hooked=%lu 被调用=%d 被改写=%d",
-                        (unsigned long)gSTSHookedKeys.count,
-                        gSTSInvokedCount,
-                        gSTSChangedCount]);
-            {
-                STSConfig *c = [STSConfig shared];
-                STSLogLine([NSString stringWithFormat:
-                            @"## 生效参数：mode=%s target=%.1fmin scale=%.3f 原始总时长=%.1fmin 系数=%.4f 缩放分项=%d",
-                            STSModeName(c.mode), c.targetSeconds / 60.0, c.scale,
-                            gSTSTotalOriginal / 60.0, STSBaseFactor(), c.scaleDetails ? 1 : 0]);
+    // 4) 多次累计统计：只打一次「8 秒统计」时，用户往往还没进「屏幕使用时间」
+    //    页面，被调用=0 会被误读成「hook 挂错类」（boot(7).log 正是如此）。
+    //    改成 8/20/45/90 秒各打一次，任何时刻抓日志都能看到累计调用数，
+    //    并列出此刻已加载的相关框架，用来判断「到底进没进那个页面」。
+    for (NSNumber *stat in @[@(8.0), @(20.0), @(45.0), @(90.0)]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(stat.doubleValue * (double)NSEC_PER_SEC)),
+                       STSWorkQueue(), ^{
+            @autoreleasepool {
+                @try {
+                    STSLogLine([NSString stringWithFormat:
+                                @"## %.0f 秒统计：hooked=%lu 被调用=%d 被改写=%d",
+                                stat.doubleValue,
+                                (unsigned long)gSTSHookedKeys.count,
+                                gSTSInvokedCount, gSTSChangedCount]);
+                    {
+                        STSConfig *c = [STSConfig shared];
+                        STSLogLine([NSString stringWithFormat:
+                                    @"## 生效参数：mode=%s target=%.1fmin scale=%.3f 原始总时长=%.1fmin 系数=%.4f 缩放分项=%d",
+                                    STSModeName(c.mode), c.targetSeconds / 60.0, c.scale,
+                                    gSTSTotalOriginal / 60.0, STSBaseFactor(), c.scaleDetails ? 1 : 0]);
+                    }
+                    NSMutableArray *loaded = [NSMutableArray array];
+                    uint32_t ic = _dyld_image_count();
+                    for (uint32_t i = 0; i < ic; i++) {
+                        const char *nm = _dyld_get_image_name(i);
+                        if (STSIsDumpTargetImage(nm)) {
+                            NSString *s = [NSString stringWithUTF8String:nm];
+                            if (s) [loaded addObject:s];
+                        }
+                    }
+                    STSLogLine([NSString stringWithFormat:@"## 当前已加载相关框架（%lu）：%@",
+                                (unsigned long)loaded.count,
+                                loaded.count ? [loaded componentsJoinedByString:@", "] : @"(无)"]);
+                    if (gSTSHookedKeys.count == 0) {
+                        STSLogLine(@"## 结论：一个方法都没挂上 —— 类名/选择器与预期不符");
+                    } else if (gSTSInvokedCount == 0) {
+                        STSLogLine(@"## 结论：零调用。若上面没有 ScreenTimeSettingsUI 之类 UI 框架，说明还没进入「屏幕使用时间」页面；请手动进入并停留 5 秒后再抓日志");
+                    } else if (gSTSChangedCount == 0) {
+                        STSLogLine(@"## 结论：界面调用了被挂的 getter，但值未被改写 —— 检查 mode/护栏/配置");
+                    } else {
+                        STSLogLine(@"## 结论：已生效，界面显示值应被缩放");
+                    }
+                } @catch (NSException *e) {
+                }
             }
-            if (gSTSHookedKeys.count == 0) {
-                STSLogLine(@"## 结论：一个方法都没挂上 —— 类名/选择器与预期不符，按下方全量候选清单适配");
-            } else if (gSTSInvokedCount == 0) {
-                STSLogLine(@"## 结论：已挂上，但界面没有调用这些 getter —— 显示数据来自其它类");
-            } else if (gSTSChangedCount == 0) {
-                STSLogLine(@"## 结论：界面调用了被挂的 getter，但值未被改写 —— 检查 mode/护栏/配置");
-            } else {
-                STSLogLine(@"## 结论：已生效，界面显示值应被缩放");
-            }
-        } @catch (NSException *e) {
-        }
-    });
+        });
+    }
 }
