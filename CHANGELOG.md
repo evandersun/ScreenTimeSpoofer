@@ -1,8 +1,18 @@
 # 更新日志 · ScreenTimeSpoofer
 
-当前稳定版：**v0.6.4**。按时间倒序排列，完整源码见 [github.com/evandersun/ScreenTimeSpoofer](https://github.com/evandersun/ScreenTimeSpoofer)。
+当前稳定版：**v1.0**。按时间倒序排列，完整源码见 [github.com/evandersun/ScreenTimeSpoofer](https://github.com/evandersun/ScreenTimeSpoofer)。
 
 ---
+
+## v1.0 · 2026-11-08
+
+**正式版基线 + 包内详情页**
+
+- 版本号 `0.6.4` → **`1.0`**：`STSConstants.h` 的 `STS_VERSION`、`control`、bundle `Info.plist` 三处同步，boot 日志首行可直接看出装的是 1.0。
+- `control` 新增 **`Depiction`**（网页详情页）与 **`SileoDepiction`**（Sileo 原生 JSON）字段，包管理器里点开插件即可看到完整更新内容、安装步骤与包信息。
+- 新增 `depiction/screentimespoofer.html`（深色主题，含 v1.0 更新内容、功能说明、包信息、安装步骤、历史版本、源地址复制）与 `depiction/screentimespoofer.json`（`DepictionTabView` 两个 tab：更新内容 / 包信息）。
+- 功能逻辑无改动，仍是双架构同步发布：`iphoneos-arm64e`（roothide）/ `iphoneos-arm64`（rootless）。
+- 源码里 `ScreenTimeSpoofer-1.0.deb` / `-1.0-rootless.deb` 由 `build_deb.sh` 产出，源仓库 `debs/` 已替换为 1.0 两个包，旧的 0.6.4 包下架。
 
 ## v0.6.4 · 2026-11-07
 

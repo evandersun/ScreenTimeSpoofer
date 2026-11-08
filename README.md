@@ -4,7 +4,7 @@
 
 支持 **roothide（Dopamine RootHide 等隐根，默认）**、rootless（Dopamine / palera1n）与 rootful 三种越狱环境，目标 iOS 15 及以上。
 
-> GitHub 仓库：<https://github.com/evandersun/ScreenTimeSpoofer>　|　**越狱源：`https://evandersun.github.io/`**（Sileo / Zebra / Cydia 添加后直接搜索安装，自动匹配 roothide / rootless）　|　预编译包下载：<https://github.com/evandersun/ScreenTimeSpoofer/releases/tag/v0.6.4>
+> GitHub 仓库：<https://github.com/evandersun/ScreenTimeSpoofer>　|　**越狱源：`https://evandersun.github.io/`**（Sileo / Zebra / Cydia 添加后直接搜索安装，自动匹配 roothide / rootless）　|　预编译包下载：<https://github.com/evandersun/ScreenTimeSpoofer/releases/tag/v1.0>
 
 ---
 
@@ -165,6 +165,22 @@ cat /var/mobile/Library/Logs/ScreenTimeSpoofer-boot.log
 ```
 
 把内容发我即可定位。
+
+### v1.0：正式版 + 包内详情页
+
+版本号从 `0.6.4` 正式升到 **`1.0`**，作为稳定版基线（`STSConstants.h`、`control`、bundle `Info.plist` 三处统一，boot 日志首行也同步）。
+
+`control` 新增两个详情页字段，装之前在包管理器里点开插件就能看到更新内容与安装说明，不用再跳外部网页：
+
+```sh
+Depiction: https://evandersun.github.io/depiction/screentimespoofer.html
+SileoDepiction: https://evandersun.github.io/depiction/screentimespoofer.json
+```
+
+- `Depiction` 是网页版，Cydia / Zebra / Sileo 通用；
+- `SileoDepiction` 走 Sileo 原生 `DepictionTabView`，深色主题下不闪白、加载更快；其他客户端自动回落到网页版。
+- 两个文件都在源仓库 `depiction/` 下，改版本时同步改这两个文件即可。
+- 功能本身无改动：仍是「目标时长输入 + 应用」「一键进入屏幕使用时间」「QQ 群入口」三个入口，roothide / rootless 双架构同步发布。
 
 ### v0.6.4：设置页新增「QQ群：1135135953」入口
 
